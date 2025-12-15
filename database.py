@@ -1,64 +1,57 @@
-from sqlalchemy import create_engine, Column, Integer, String, DateTime, ForeignKey, Date
+from sqlalchemy import create_engine, Column, Integer, String, Date, DateTime
+from sqlalchemy.orm import sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, relationship
-from datetime import datetime, date
+import streamlit as st
+import os
 
-# Configurazione del Database (SQLite file)
-DATABASE_URL = "sqlite:///barberia.db"
-Engine = create_engine(DATABASE_URL)
+# --- CONFIGURAZIONE CRITICA PER STREAMLIT CLOUD SENZA DB ESTERNO ---
+# Utilizza SQLite in memoria. I dati NON VERRANNO SALVATI TRA I RIAVVII.
+DATABASE_URL = "sqlite:///:memory:"
+
+# SQLite necessita di questo flag per la sicurezza del thread
+connect_args={"check_same_thread": False}
+
+# Inizializzazione del motore
+engine = create_engine(
+    DATABASE_URL, 
+    connect_args=connect_args
+)
+
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=Engine)
 
-# --- Definizione del Modello (Tabelle) ---
+# --- Definizione del Modello (NON CAMBIA) ---
 
-# Tabella per i Barbieri (Salvatore e Raffaele)
 class Barbiere(Base):
-    __tablename__ = "barbieri"
+    __tablename__ = 'barbieri'
     id = Column(Integer, primary_key=True, index=True)
-    nome = Column(String, unique=True, index=True)
-    
-    prenotazioni = relationship("Prenotazione", back_populates="barbiere")
+    nome = Column(String)
 
-# Tabella per le Prenotazioni (Il cuore del sistema)
 class Prenotazione(Base):
-    __tablename__ = "prenotazioni"
+    __tablename__ = 'prenotazioni'
     id = Column(Integer, primary_key=True, index=True)
-    
-    # Chiave esterna che lega la prenotazione al barbiere
-    barbiere_id = Column(Integer, ForeignKey("barbieri.id"))
-    barbiere = relationship("Barbiere", back_populates="prenotazioni")
-    
-    # Dati Appuntamento
-    data_appuntamento = Column(Date, index=True)
+    barbiere_id = Column(Integer)
+    data_appuntamento = Column(Date)
     ora_inizio = Column(DateTime)
     ora_fine = Column(DateTime)
-    servizio = Column(String) # Potrebbe essere un'altra FK, ma String è più semplice ora
-    
-    # Dati Cliente
+    servizio = Column(String)
     cliente_nome = Column(String)
     cliente_telefono = Column(String)
 
-# --- Funzioni di Utility ---
+# --- Funzione di Inizializzazione ---
 
 def init_db():
-    """Crea le tabelle se non esistono e popola i dati iniziali."""
-    Base.metadata.create_all(bind=Engine)
-    db = SessionLocal()
+    # Crea le tabelle (le ricrea in memoria a ogni avvio)
+    Base.metadata.create_all(bind=engine)
     
-    # Popola i barbieri solo se non sono già presenti
+    # Popola la tabella barbieri
+    db = SessionLocal()
+    # Controlliamo se i barbieri sono già stati creati in questa sessione in memoria
     if db.query(Barbiere).count() == 0:
-        salvatore = Barbiere(id=1, nome="Salvatore")
-        raffaele = Barbiere(id=2, nome="Raffaele")
-        db.add_all([salvatore, raffaele])
+        barbieri_iniziali = [
+            Barbiere(id=1, nome="Salvatore"),
+            Barbiere(id=2, nome="Raffaele")
+        ]
+        db.add_all(barbieri_iniziali)
         db.commit()
-        print("Database popolato con i barbieri iniziali.")
-    
     db.close()
-    
-def get_db():
-    """Generatore per la sessione del database (necessario per SQLAlchemy)."""
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
