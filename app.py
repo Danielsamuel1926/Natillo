@@ -253,6 +253,18 @@ def admin_app():
 def main_app():
     st.set_page_config(page_title="Prenotazione Barbiere", layout="centered")
     
+    # --- NUOVO: GESTIONE MESSAGGI PERSISTENTI ---
+    if 'last_action_status' in st.session_state:
+        if st.session_state['last_action_status'] == 'success':
+            st.success(st.session_state['last_action_message'])
+        elif st.session_state['last_action_status'] == 'error':
+            st.error(st.session_state['last_action_message'])
+            
+        # Pulisci lo stato dopo aver mostrato il messaggio una volta
+        st.session_state.pop('last_action_status')
+        st.session_state.pop('last_action_message')
+    # --- FINE GESTIONE MESSAGGI PERSISTENTI ---
+    
     # --- GRAFICA TESTUALE MIGLIORATA ---
     st.markdown(
         """
@@ -438,7 +450,6 @@ def main_app():
                             cliente_nome=nome,
                             cliente_telefono=telefono
                         )
-                        # CORREZIONE ERRORE DI BATTITURA: usa nuova_prenotazione
                         db.add(nuova_prenotazione) 
                         db.commit()
                         db.close()
@@ -447,14 +458,23 @@ def main_app():
                         dati_finali['cliente_nome'] = nome
                         send_confirmation_message(telefono, dati_finali)
                         
-                        # 3. CONFERMA SU SCHERMO E RESETTA STATO
-                        st.success(f"✂️ Appuntamento confermato! Ti aspettiamo il {dati_finali['data']} alle {dati_finali['ora_inizio']}. 💈")
+                        # 3. CONFERMA SU STATO PERSISTENTE E RERUN
+                        st.session_state['last_action_status'] = 'success'
+                        st.session_state['last_action_message'] = f"✂️ Appuntamento confermato! Ti aspettiamo il {dati_finali['data']} alle {dati_finali['ora_inizio']}. 💈"
                         st.session_state.pop('prenotazione_finale') 
                         st.rerun() 
-                    except OperationalError:
-                        st.error("Errore durante il salvataggio. Riprova subito a inviare il modulo.")
+                        
+                    except OperationalError as e:
+                        # Gestisce l'errore "no such table" o problemi di connessione
+                        st.session_state['last_action_status'] = 'error'
+                        st.session_state['last_action_message'] = f"Errore DB (Riprova): Impossibile scrivere i dati. Dettagli: {e}"
+                        st.rerun() # Riavvia per mostrare l'errore
                     except Exception as e:
-                        st.error(f"Errore durante il salvataggio. Dettagli: {e}")
+                        # Gestisce tutti gli altri errori imprevisti
+                        st.session_state['last_action_status'] = 'error'
+                        st.session_state['last_action_message'] = f"Errore CRITICO durante il salvataggio. Dettagli: {e}"
+                        st.rerun() # Riavvia per mostrare l'errore
+
                 else:
                     st.error("Per favor, inserisci Nome e Telefono.")
     
@@ -482,7 +502,6 @@ if __name__ == "__main__":
     try:
         init_db() 
     except Exception as e:
-        # Questo cattura l'errore che causa lo schermo nero
         st.error(f"Errore critico di inizializzazione del database. L'app non può funzionare. Dettagli: {e}")
         st.stop()
             
