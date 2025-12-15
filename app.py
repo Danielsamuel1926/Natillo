@@ -1,6 +1,7 @@
 import streamlit as st
 from datetime import datetime, time, timedelta, date
-from database import init_db, Prenotazione, Barbiere, SessionLocal
+# Importiamo da database.py, che ora si connette in memoria
+from database import init_db, Prenotazione, SessionLocal 
 from sqlalchemy import extract 
 
 # --- 1. DATI STATICI DEL PROGETTO (Configurazione) ---
@@ -36,28 +37,23 @@ def get_orari_disponibili(data_selezionata: date, durata_servizio_min: int, pren
     disponibilita = []
     durata_servizio = timedelta(minutes=durata_servizio_min)
     
-    # 1. Iterazione su tutti gli intervalli di apertura
     for start_time, end_time in ORARI_APERTURA:
         current_time = datetime.combine(data_selezionata, start_time)
         end_boundary = datetime.combine(data_selezionata, end_time)
 
-        # 2. Iterazione su ogni slot di 30 minuti (la cadenza minima)
         while current_time < end_boundary:
             
             fine_prenotazione = current_time + durata_servizio
             
-            # Se il servizio finisce oltre l'orario di chiusura, non è disponibile
             if fine_prenotazione > end_boundary:
                 current_time += SLOT_CADENZA
                 continue
 
-            # 3. Verifica delle sovrapposizioni
             slot_libero = True
             for p in prenotazioni_esistenti:
                 start_esistente = p['start']
                 end_esistente = p['end']
 
-                # Verifica se il nuovo slot si sovrappone a una prenotazione esistente
                 if current_time < end_esistente and fine_prenotazione > start_esistente:
                     slot_libero = False
                     break 
@@ -69,14 +65,15 @@ def get_orari_disponibili(data_selezionata: date, durata_servizio_min: int, pren
 
     return disponibilita
 
-# --- 3. FUNZIONE DI ACCESSO AL DATABASE (DB) ---
+# --- 3. FUNZIONE DI ACCESSO AL DATABASE (DB) E MESSAGGISTICA ---
 
 def fetch_prenotazioni_per_barbiere(barbiere_id, data_selezionata):
     """
-    Recupera le prenotazioni REALI dal database per l'Admin Panel.
+    Recupera le prenotazioni REALI dal database.
     """
     db = SessionLocal()
     
+    # Usa extract per filtrare solo per la data
     prenotazioni_records = db.query(Prenotazione).filter(
         Prenotazione.barbiere_id == barbiere_id,
         Prenotazione.data_appuntamento == data_selezionata
@@ -87,7 +84,7 @@ def fetch_prenotazioni_per_barbiere(barbiere_id, data_selezionata):
     risultati_formattati = []
     for p in prenotazioni_records:
         risultati_formattati.append({
-            'id': p.id, # <--- AGGIUNTO ID PER ELIMINAZIONE
+            'id': p.id, 
             'start': p.ora_inizio,
             'end': p.ora_fine,
             'cliente_nome': p.cliente_nome,
@@ -96,7 +93,6 @@ def fetch_prenotazioni_per_barbiere(barbiere_id, data_selezionata):
         
     return risultati_formattati
 
-# --- NUOVA FUNZIONE HELPER PER L'ELIMINAZIONE ---
 def delete_appointment(prenotazione_id):
     """Elimina una prenotazione dal database dato l'ID."""
     db = SessionLocal()
@@ -108,7 +104,17 @@ def delete_appointment(prenotazione_id):
         return True
     db.close()
     return False
-# -----------------------------------------------
+
+def send_confirmation_message(telefono, dati_finali):
+    """
+    Funzione placeholder per l'invio di SMS/WhatsApp.
+    """
+    nome_cliente = dati_finali.get('cliente_nome', 'Cliente') 
+    
+    # Solo un messaggio di stato, la logica API deve essere implementata qui
+    st.toast(f"Tentativo di invio messaggio a {telefono}", icon='📱')
+    
+    return True 
 
 # --- 4. INTERFACCIA DI GESTIONE (ADMIN PANEL) ---
 
@@ -116,7 +122,6 @@ def display_calendar_view(barbiere_id, nome_barbiere, data_selezionata):
     """Visualizza il calendario degli appuntamenti per un singolo barbiere, con opzione Elimina."""
     st.markdown(f"**{nome_barbiere}**")
 
-    # 1. Recupera le prenotazioni dal DB
     prenotazioni_del_giorno = fetch_prenotazioni_per_barbiere(barbiere_id, data_selezionata)
     
     if not prenotazioni_del_giorno:
@@ -125,7 +130,6 @@ def display_calendar_view(barbiere_id, nome_barbiere, data_selezionata):
     else:
         st.markdown("##### Appuntamenti del Giorno:")
         
-        # Colonna per visualizzazione e eliminazione
         col_ora, col_durata, col_cliente, col_azione = st.columns([1, 1, 2, 1])
         col_ora.markdown("**Ora**")
         col_durata.markdown("**Durata**")
@@ -138,7 +142,6 @@ def display_calendar_view(barbiere_id, nome_barbiere, data_selezionata):
             prenotazione_id = p['id']
             durata_min = int((p['end'] - p['start']).total_seconds() / 60) 
             
-            # Row for each appointment
             col_ora, col_durata, col_cliente, col_azione = st.columns([1, 1, 2, 1])
             
             col_ora.write(p['start'].strftime("%H:%M"))
@@ -146,15 +149,13 @@ def display_calendar_view(barbiere_id, nome_barbiere, data_selezionata):
             col_cliente.write(f"**{p['cliente_nome']}** - {p['servizio']}")
             
             with col_azione:
-                # Pulsante di eliminazione
                 if st.button("❌", help="Elimina appuntamento", key=f"delete_{prenotazione_id}"):
                     if delete_appointment(prenotazione_id):
                         st.toast(f"Appuntamento di {p['cliente_nome']} eliminato.", icon='🗑️')
-                        st.rerun() # Forza il refresh della pagina
+                        st.rerun() 
                     else:
                         st.error("Errore nell'eliminazione dell'appuntamento.")
     
-    # 4. Aggiungi la possibilità di inserire manualmente (RESTO DEL CODICE ADMIN)
     st.markdown(f"**Aggiungi Appuntamento**")
     with st.expander("Inserimento Manuale"):
         with st.form(f"form_manuale_{barbiere_id}"):
@@ -194,15 +195,30 @@ def display_calendar_view(barbiere_id, nome_barbiere, data_selezionata):
                         db.add(nuova_prenotazione)
                         db.commit()
                         db.close()
+                        
+                        send_confirmation_message(tel_cli, {
+                            'cliente_nome': nome_cli, 
+                            'servizio': servizio_manuale, 
+                            'data': data_selezionata.strftime("%d/%m/%Y"), 
+                            'ora_inizio': ora_manuale.strftime("%H:%M"), 
+                            'barbiere_nome': nome_barbiere
+                        })
+                        
                         st.success(f"Appuntamento salvato per {nome_barbiere} alle {ora_manuale.strftime('%H:%M')}!")
                         st.rerun() 
                     except Exception as e:
-                        st.error(f"Errore DB: Impossibile salvare l'appuntamento. {e}")
+                        # La gestione degli errori è ora meno critica grazie a :memory:
+                        st.error(f"Errore DB: Impossibile salvare l'appuntamento. Dettagli: {e}")
                 
 def admin_app():
     st.title("✂️ Pannello di Gestione Appuntamenti")
     
-    # 1. Selettore di Data per l'Amministratore
+    if st.button("⬅️ Torna alla modalità Prenotazione Clienti"):
+        st.session_state['current_view'] = 'client'
+        st.rerun()
+    
+    st.markdown("---")
+    
     min_date = date.today()
     data_scelta_admin = st.date_input(
         "Seleziona la data da visualizzare:",
@@ -217,45 +233,58 @@ def admin_app():
 
     st.markdown("---")
 
-    # 2. Visualizzazione Affiancata (due colonne)
     col_salvatore, col_raffaele = st.columns(2)
 
     with col_salvatore:
-        # Usa l'ID 1 per Salvatore
         display_calendar_view(1, "Salvatore", data_scelta_admin)
 
     with col_raffaele:
-        # Usa l'ID 2 per Raffaele
         display_calendar_view(2, "Raffaele", data_scelta_admin)
 
 
 # --- 5. INTERFACCIA PRINCIPALE STREAMLIT (Lato Cliente) ---
 
 def main_app():
-    init_db() 
     st.set_page_config(page_title="Prenotazione Barbiere", layout="centered")
     
-    # Setup del Logo e Titolo
+    # --- GRAFICA TESTUALE MIGLIORATA ---
     st.markdown(
         """
-        <div style="text-align: center; margin-bottom: 20px;">
-            <h1>SALVATORE NATILLO</h1>
-            <p>MODA CAPELLI UOMO</p>
-            <p style="font-size: small;">[Logo Barbiere Qui]</p>
-        </div>
+        <style>
+        .barber-title {
+            font-family: 'Playfair Display', serif; 
+            font-size: 3.5em; 
+            font-weight: bold;
+            color: #f69a23; 
+            text-align: center;
+            margin-bottom: -15px; 
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.5); 
+        }
+        .barber-subtitle {
+            font-family: 'Open Sans', sans-serif; 
+            font-size: 1.2em;
+            color: #CCCCCC; 
+            text-align: center;
+            margin-bottom: 25px;
+            letter-spacing: 2px; 
+        }
+        </style>
+        <div class="barber-title">SALVATORE NATILLO</div>
+        <div class="barber-subtitle">MODA CAPELLI UOMO</div>
         """, 
         unsafe_allow_html=True
     )
+    # --- FINE GRAFICA TESTUALE ---
     
     st.subheader("1. Scegli il tuo servizio")
     
-    service_options = [f"{s} ({d} min)" for s, d in SERVIZI.items()]
+    service_options = ["Seleziona un servizio..."] + [f"{s} ({d} min)" for s, d in SERVIZI.items()]
     service_selection = st.selectbox(
         "Seleziona il trattamento desiderato:",
         options=service_options
     )
     
-    if not service_selection:
+    if service_selection == "Seleziona un servizio...":
         return 
         
     service_name = service_selection.split(" (")[0]
@@ -263,18 +292,20 @@ def main_app():
     st.info(f"Durata stimata: **{durata_servizio_min} minuti**.")
 
 
-    # --- FASE 2: Scelta Barbiere e Data ---
     st.subheader("2. Scegli Barbiere e Data")
 
     barbiere_id_map = {name: id for id, name in BARBIERI.items()}
-    barbiere_selection_options = ["Indifferente"] + list(BARBIERI.values())
+    
+    barbiere_selection_options = ["Seleziona un barbiere..."] + ["Indifferente"] + list(BARBIERI.values())
     
     barbiere_scelto_nome = st.selectbox(
         "Preferisci prenotare con:",
         options=barbiere_selection_options
     )
     
-    # Trova il primo giorno disponibile 
+    if barbiere_scelto_nome == "Seleziona un barbiere...":
+        return 
+
     def is_day_available(check_date):
         return check_date.weekday() not in GIORNI_CHIUSURA 
 
@@ -293,7 +324,6 @@ def main_app():
         st.error("Il Barbiere è chiuso di Lunedì e Domenica.")
         return
 
-    # --- FASE 3: Visualizzazione Slot (Menu a Tendina) ---
     st.subheader("3. Scegli l'ora disponibile")
     
     opzioni_disponibili = ["Seleziona un orario..."]
@@ -307,13 +337,9 @@ def main_app():
         barbieri_da_controllare = [(barbiere_id, barbiere_scelto_nome)]
     
 
-    # Itera sui barbieri per raccogliere gli slot
     for id_barbiere, nome_barbiere in barbieri_da_controllare:
         
-        # Uso la funzione fetch_prenotazioni_per_barbiere per la schedulazione.
         prenotazioni_barbiere_raw = fetch_prenotazioni_per_barbiere(id_barbiere, data_scelta)
-        
-        # Filtro i dati per passarli alla schedulazione (la schedulazione non ha bisogno di nome/servizio)
         prenotazioni_barbiere = [{'start': p['start'], 'end': p['end']} for p in prenotazioni_barbiere_raw]
 
         slots_liberi = get_orari_disponibili(data_scelta, durata_servizio_min, prenotazioni_barbiere)
@@ -321,22 +347,22 @@ def main_app():
         for slot in slots_liberi:
             slot_time = slot.strftime("%H:%M")
             
+            opzione_completa = slot_time # Inizia con solo l'orario
+            
             if barbiere_scelto_nome == "Indifferente":
-                opzione_completa = f"{slot_time} con {nome_barbiere}"
-            else:
-                opzione_completa = slot_time
+                 # Aggiungi il nome del barbiere solo se è stata scelta l'opzione "Indifferente"
+                opzione_completa = f"{slot_time} con {nome_barbiere}" 
 
             opzioni_disponibili.append(opzione_completa)
             
+            # Mappa SEMPRE l'opzione visualizzata all'ID del barbiere
             slot_to_barbiere_map[opzione_completa] = id_barbiere
 
     
-    # Ordina gli slot per ora
     slot_options_sorted = sorted(opzioni_disponibili[1:])
     final_options = [opzioni_disponibili[0]] + slot_options_sorted
 
 
-    # Visualizzazione Menu a Tendina
     selected_slot_option = st.selectbox(
         "Orari disponibili (solo quelli liberi):",
         options=final_options,
@@ -347,10 +373,17 @@ def main_app():
     # --- Modulo di Conferma Finale (Attivato dalla selezione dal menu a tendina) ---
     if selected_slot_option != "Seleziona un orario...":
         
-        barbiere_id_finale = slot_to_barbiere_map[selected_slot_option]
+        try:
+            barbiere_id_finale = slot_to_barbiere_map[selected_slot_option]
+        except KeyError:
+            st.error("Errore nel recupero del barbiere. Riprova la selezione.")
+            return
+
         barbiere_nome_finale = BARBIERI[barbiere_id_finale]
         
+        # Estraiamo l'orario (sempre la prima parte)
         ora_inizio_finale = selected_slot_option.split(" con")[0] 
+        
         
         st.session_state['prenotazione_finale'] = {
             'barbiere_id': barbiere_id_finale,
@@ -361,8 +394,7 @@ def main_app():
         }
         st.rerun() 
 
-    # Messaggio di avviso se non ci sono slot
-    if len(final_options) <= 1:
+    if len(final_options) <= 1 and selected_slot_option == "Seleziona un orario...":
         st.warning("Nessun orario disponibile per la data e il servizio selezionato.")
         
         
@@ -387,7 +419,7 @@ def main_app():
                         durata_min = SERVIZI[dati_finali['servizio'].split(" (")[0]]
                         data_ora_fine = data_ora_inizio + timedelta(minutes=durata_min)
                         
-                        # Salvataggio
+                        # 1. SALVA SUL DB (Ora su SQLite in memoria)
                         db = SessionLocal()
                         nuova_prenotazione = Prenotazione(
                             barbiere_id=dati_finali['barbiere_id'],
@@ -402,28 +434,51 @@ def main_app():
                         db.commit()
                         db.close()
                         
-                        st.balloons() 
-                        st.success(f"🎉 Appuntamento confermato! Ti aspettiamo il {dati_finali['data']} alle {dati_finali['ora_inizio']}.")
+                        # 2. PREPARA E INVIA MESSAGGIO
+                        dati_finali['cliente_nome'] = nome
+                        send_confirmation_message(telefono, dati_finali)
+                        
+                        # 3. CONFERMA SU SCHERMO
+                        st.success(f"✂️ Appuntamento confermato! Ti aspettiamo il {dati_finali['data']} alle {dati_finali['ora_inizio']}. 💈")
                         st.session_state.pop('prenotazione_finale') 
                     except Exception as e:
-                        st.error(f"Errore durante il salvataggio: {e}")
+                        st.error(f"Errore durante il salvataggio. Dettagli: {e}")
                 else:
                     st.error("Per favore, inserisci Nome e Telefono.")
+    
+    # --- SEZIONE DI ACCESSO ADMIN ---
+    st.markdown("---")
+    st.subheader("Accesso Riservato")
+    
+    with st.expander("Apri Pannello di Gestione"):
+        password = st.text_input("Password Admin:", type="password", key="admin_password_input")
+        
+        if password == "totore":
+            st.success("Accesso Gestione Effettuato.")
+            if st.button("Vai al Pannello Admin"):
+                st.session_state['current_view'] = 'admin'
+                st.rerun()
+        elif password and password != "totore":
+            st.error("Password errata.")
+
 
 # --- 6. AVVIO APPLICAZIONE ---
 
 if __name__ == "__main__":
     
-    st.sidebar.title("Modalità")
-    # Configurazione della Password Admin
-    password = st.sidebar.text_input("Inserisci Password Admin ('admin'):", type="password")
+    if 'db_initialized' not in st.session_state:
+        try:
+            init_db() 
+            st.session_state['db_initialized'] = True 
+        except Exception as e:
+            # Se l'inizializzazione fallisce (improbabile con :memory:), avvisa l'utente
+            st.error(f"Errore critico di inizializzazione del database. Dettagli: {e}")
+            
     
-    mode = "Clienti (Prenotazione)"
-    if password == "admin":
-        st.sidebar.success("Accesso Gestione Effettuato.")
-        mode = st.sidebar.radio("Seleziona Interfaccia:", ["Clienti (Prenotazione)", "Gestione (Admin Panel)"])
-    
-    if mode == "Clienti (Prenotazione)":
-        main_app()
-    elif mode == "Gestione (Admin Panel)":
+    if 'current_view' not in st.session_state:
+        st.session_state['current_view'] = 'client'
+        
+    if st.session_state['current_view'] == 'admin':
         admin_app()
+    else:
+        main_app()
