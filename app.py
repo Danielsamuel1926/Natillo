@@ -219,6 +219,9 @@ def display_calendar_view(barbiere_id, nome_barbiere, data_selezionata):
 def admin_app():
     st.title("✂️ Pannello di Gestione Appuntamenti")
     
+    # AVVISO IMPORTANTE: Riguardo il DB in memoria
+    st.warning("ATTENZIONE: Questa applicazione utilizza un database in memoria (SQLite). I dati vengono persi ogni volta che l'app viene riavviata su Streamlit Cloud. Le prenotazioni compaiono solo se fatte DURANTE questa sessione attiva dell'app.")
+
     if st.button("⬅️ Torna alla modalità Prenotazione Clienti"):
         st.session_state['current_view'] = 'client'
         st.rerun()
@@ -253,7 +256,7 @@ def admin_app():
 def main_app():
     st.set_page_config(page_title="Prenotazione Barbiere", layout="centered")
     
-    # --- NUOVO: GESTIONE MESSAGGI PERSISTENTI ---
+    # --- GESTIONE MESSAGGI PERSISTENTI (Per visualizzare successo o errore dopo rerun) ---
     if 'last_action_status' in st.session_state:
         if st.session_state['last_action_status'] == 'success':
             st.success(st.session_state['last_action_message'])
@@ -314,7 +317,8 @@ def main_app():
 
     barbiere_id_map = {name: id for id, name in BARBIERI.items()}
     
-    barbiere_selection_options = ["Seleziona un barbiere..."] + ["Indifferente"] + list(BARBIERI.values())
+    # MODIFICA: Rimosso "Indifferente"
+    barbiere_selection_options = ["Seleziona un barbiere..."] + list(BARBIERI.values())
     
     barbiere_scelto_nome = st.selectbox(
         "Preferisci prenotare con:",
@@ -323,17 +327,20 @@ def main_app():
     
     if barbiere_scelto_nome == "Seleziona un barbiere...":
         return 
+    
+    barbiere_id_scelto = barbiere_id_map[barbiere_scelto_nome]
 
     def is_day_available(check_date):
         return check_date.weekday() not in GIORNI_CHIUSURA 
 
     min_date = date.today()
+    # Questa logica assicura che il default sia il prossimo giorno lavorativo (Oggi se aperto)
     while not is_day_available(min_date):
         min_date += timedelta(days=1)
     
     data_scelta = st.date_input(
         "Seleziona una data per l'appuntamento:",
-        value=min_date,
+        value=min_date, # Default al primo giorno disponibile
         min_value=min_date,
         format="DD/MM/YYYY"
     )
@@ -347,34 +354,25 @@ def main_app():
     opzioni_disponibili = ["Seleziona un orario..."]
     slot_to_barbiere_map = {} 
     
-    barbieri_da_controllare = []
-    if barbiere_scelto_nome == "Indifferente":
-        barbieri_da_controllare = list(BARBIERI.items())
-    else:
-        barbiere_id = barbiere_id_map[barbiere_scelto_nome]
-        barbieri_da_controllare = [(barbiere_id, barbiere_scelto_nome)]
+    # Poiché il barbiere è già selezionato in modo univoco
+    barbiere_id = barbiere_id_scelto
+    nome_barbiere = barbiere_scelto_nome
     
+    prenotazioni_barbiere_raw = fetch_prenotazioni_per_barbiere(barbiere_id, data_scelta)
+    prenotazioni_barbiere = [{'start': p['start'], 'end': p['end']} for p in prenotazioni_barbiere_raw]
 
-    for id_barbiere, nome_barbiere in barbieri_da_controllare:
+    slots_liberi = get_orari_disponibili(data_scelta, durata_servizio_min, prenotazioni_barbiere)
+
+    for slot in slots_liberi:
+        slot_time = slot.strftime("%H:%M")
         
-        prenotazioni_barbiere_raw = fetch_prenotazioni_per_barbiere(id_barbiere, data_scelta)
-        prenotazioni_barbiere = [{'start': p['start'], 'end': p['end']} for p in prenotazioni_barbiere_raw]
+        # MODIFICA: Rimosso il nome del barbiere dall'opzione (es. "15:30")
+        opzione_completa = slot_time 
 
-        slots_liberi = get_orari_disponibili(data_scelta, durata_servizio_min, prenotazioni_barbiere)
-
-        for slot in slots_liberi:
-            slot_time = slot.strftime("%H:%M")
-            
-            opzione_completa = slot_time 
-            
-            if barbiere_scelto_nome == "Indifferente":
-                opzione_completa = f"{slot_time} con {nome_barbiere}" 
-            elif len(barbieri_da_controllare) == 1:
-                opzione_completa = f"{slot_time} con {nome_barbiere}" 
-
-            if opzione_completa not in slot_to_barbiere_map:
-                opzioni_disponibili.append(opzione_completa)
-                slot_to_barbiere_map[opzione_completa] = id_barbiere
+        if opzione_completa not in slot_to_barbiere_map:
+            opzioni_disponibili.append(opzione_completa)
+            # Associamo lo slot orario al Barbiere ID corretto (che è l'unico scelto)
+            slot_to_barbiere_map[opzione_completa] = barbiere_id
 
     
     slot_options_sorted = sorted([o for o in opzioni_disponibili if o != "Seleziona un orario..."])
@@ -392,6 +390,7 @@ def main_app():
     if selected_slot_option != "Seleziona un orario...":
         
         try:
+            # selected_slot_option ORA contiene solo l'orario (es. "09:00")
             barbiere_id_finale = slot_to_barbiere_map[selected_slot_option]
         except KeyError:
             st.warning("Seleziona di nuovo l'orario, errore interno nel mapping.")
@@ -400,7 +399,8 @@ def main_app():
 
         barbiere_nome_finale = BARBIERI[barbiere_id_finale]
         
-        ora_inizio_finale = selected_slot_option.split(" con")[0] 
+        # L'ora inizio è l'opzione selezionata stessa, non c'è bisogno di fare split
+        ora_inizio_finale = selected_slot_option 
         
         
         # Aggiorna lo stato della prenotazione in session_state
@@ -465,15 +465,13 @@ def main_app():
                         st.rerun() 
                         
                     except OperationalError as e:
-                        # Gestisce l'errore "no such table" o problemi di connessione
                         st.session_state['last_action_status'] = 'error'
                         st.session_state['last_action_message'] = f"Errore DB (Riprova): Impossibile scrivere i dati. Dettagli: {e}"
-                        st.rerun() # Riavvia per mostrare l'errore
+                        st.rerun() 
                     except Exception as e:
-                        # Gestisce tutti gli altri errori imprevisti
                         st.session_state['last_action_status'] = 'error'
                         st.session_state['last_action_message'] = f"Errore CRITICO durante il salvataggio. Dettagli: {e}"
-                        st.rerun() # Riavvia per mostrare l'errore
+                        st.rerun() 
 
                 else:
                     st.error("Per favor, inserisci Nome e Telefono.")
