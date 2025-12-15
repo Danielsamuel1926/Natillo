@@ -1,58 +1,47 @@
+# File: database.py
+
 from sqlalchemy import create_engine, Column, Integer, String, DateTime
-from sqlalchemy.orm import sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
-import streamlit as st
-import os
+from sqlalchemy.orm import sessionmaker
+from datetime import datetime
+import streamlit as st # Importato per usare la cache di Streamlit
 
-# --- CONFIGURAZIONE CRITICA PER STREAMLIT CLOUD (SQLite in Memoria) ---
-# ATTENZIONE: I dati non saranno persistenti tra i riavvii dell'app.
-DATABASE_URL = "sqlite:///:memory:"
+# --- Configurazione del Database PERSISTENTE ---
+# Utilizziamo un file chiamato 'appuntamenti.db' nella directory dell'app
+# Questo risolve il problema della perdita di dati tra i refresh.
+DATABASE_URL = "sqlite:///appuntamenti.db"
 
-# Flag di sicurezza del thread per SQLite
-connect_args={"check_same_thread": False}
-
-# Inizializzazione del motore
-engine = create_engine(
-    DATABASE_URL, 
-    connect_args=connect_args
-)
-
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
-# --- Definizione dei Modelli (Allineati su DateTime) ---
-
-class Barbiere(Base):
-    __tablename__ = 'barbieri'
-    id = Column(Integer, primary_key=True, index=True)
-    nome = Column(String)
-
+# Definizione del modello
 class Prenotazione(Base):
-    __tablename__ = 'prenotazioni'
+    __tablename__ = "prenotazioni"
+    
     id = Column(Integer, primary_key=True, index=True)
-    barbiere_id = Column(Integer)
-    data_appuntamento = Column(DateTime) 
-    ora_inizio = Column(DateTime)
+    barbiere_id = Column(Integer, index=True) # 1 per Salvatore, 2 per Raffaele
+    data_appuntamento = Column(DateTime, index=True) 
+    ora_inizio = Column(DateTime, default=datetime.utcnow)
     ora_fine = Column(DateTime)
     servizio = Column(String)
     cliente_nome = Column(String)
     cliente_telefono = Column(String)
 
-# --- Funzione di Inizializzazione ---
+    def __repr__(self):
+        return f"<Prenotazione(id={self.id}, barbiere={self.barbiere_id}, data='{self.data_appuntamento}')>"
+
+# --- Funzioni di Inizializzazione con Cache di Streamlit ---
+
+@st.cache_resource
+def get_engine():
+    """Crea e mette in cache il motore SQLAlchemy."""
+    return create_engine(
+        DATABASE_URL, connect_args={"check_same_thread": False}
+    )
+
+engine = get_engine()
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 def init_db():
-    """
-    Crea le tabelle del database e popola i dati statici dei barbieri.
-    """
+    """Crea le tabelle se non esistono."""
+    # Base.metadata.drop_all(bind=engine) # DEBUG: Decommenta per resettare
     Base.metadata.create_all(bind=engine)
-    
-    # Popola la tabella barbieri
-    db = SessionLocal()
-    if db.query(Barbiere).count() == 0:
-        barbieri_iniziali = [
-            Barbiere(id=1, nome="Salvatore"),
-            Barbiere(id=2, nome="Raffaele")
-        ]
-        db.add_all(barbieri_iniziali)
-        db.commit()
-    db.close()
