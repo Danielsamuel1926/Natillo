@@ -4,14 +4,10 @@ from sqlalchemy.ext.declarative import declarative_base
 import streamlit as st
 import os
 
-# --- CONFIGURAZIONE CRITICA PER STREAMLIT CLOUD SENZA DB ESTERNO ---
-# Utilizza SQLite in memoria. I dati NON VERRANNO SALVATI TRA I RIAVVII.
+# --- CONFIGURAZIONE SQLite in Memoria (Invariata) ---
 DATABASE_URL = "sqlite:///:memory:"
-
-# SQLite necessita di questo flag per la sicurezza del thread
 connect_args={"check_same_thread": False}
 
-# Inizializzazione del motore
 engine = create_engine(
     DATABASE_URL, 
     connect_args=connect_args
@@ -20,7 +16,7 @@ engine = create_engine(
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
-# --- Definizione del Modello (NON CAMBIA) ---
+# --- Definizione del Modello (AGGIORNATO) ---
 
 class Barbiere(Base):
     __tablename__ = 'barbieri'
@@ -31,22 +27,20 @@ class Prenotazione(Base):
     __tablename__ = 'prenotazioni'
     id = Column(Integer, primary_key=True, index=True)
     barbiere_id = Column(Integer)
-    data_appuntamento = Column(Date)
+    # CAMBIATO: Da Date a DateTime per consistenza in SQLite
+    data_appuntamento = Column(DateTime) 
     ora_inizio = Column(DateTime)
     ora_fine = Column(DateTime)
     servizio = Column(String)
     cliente_nome = Column(String)
     cliente_telefono = Column(String)
 
-# --- Funzione di Inizializzazione ---
+# --- Funzione di Inizializzazione (Invariata) ---
 
 def init_db():
-    # Crea le tabelle (le ricrea in memoria a ogni avvio)
     Base.metadata.create_all(bind=engine)
     
-    # Popola la tabella barbieri
     db = SessionLocal()
-    # Controlliamo se i barbieri sono già stati creati in questa sessione in memoria
     if db.query(Barbiere).count() == 0:
         barbieri_iniziali = [
             Barbiere(id=1, nome="Salvatore"),
