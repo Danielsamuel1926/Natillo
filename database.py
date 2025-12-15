@@ -1,14 +1,14 @@
-from sqlalchemy import create_engine, Column, Integer, String, Date, DateTime
+from sqlalchemy import create_engine, Column, Integer, String, DateTime
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
 import streamlit as st
 import os
 
 # --- CONFIGURAZIONE CRITICA PER STREAMLIT CLOUD (SQLite in Memoria) ---
-# I dati NON VERRANNO SALVATI tra i riavvii dell'app.
+# ATTENZIONE: I dati non saranno persistenti tra i riavvii dell'app.
 DATABASE_URL = "sqlite:///:memory:"
 
-# SQLite necessita di questo flag per la sicurezza del thread in ambienti concorrenti
+# Flag di sicurezza del thread per SQLite
 connect_args={"check_same_thread": False}
 
 # Inizializzazione del motore
@@ -31,7 +31,7 @@ class Prenotazione(Base):
     __tablename__ = 'prenotazioni'
     id = Column(Integer, primary_key=True, index=True)
     barbiere_id = Column(Integer)
-    # MODIFICATO: Usiamo DateTime per coerenza con SQLite e la query 'extract' in app.py
+    # Usiamo DateTime
     data_appuntamento = Column(DateTime) 
     ora_inizio = Column(DateTime)
     ora_fine = Column(DateTime)
@@ -42,13 +42,8 @@ class Prenotazione(Base):
 # --- Funzione di Inizializzazione ---
 
 def init_db():
-    """
-    Crea le tabelle del database e popola i dati statici dei barbieri.
-    Viene eseguita a ogni avvio dell'app, ricreando il DB in memoria.
-    """
     Base.metadata.create_all(bind=engine)
     
-    # Popola la tabella barbieri
     db = SessionLocal()
     if db.query(Barbiere).count() == 0:
         barbieri_iniziali = [
