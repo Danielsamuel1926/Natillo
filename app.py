@@ -1,8 +1,9 @@
 import streamlit as st
 from datetime import datetime, time, timedelta, date
-# Importiamo da database.py, che ora si connette in memoria
+# Importiamo SessionLocal e i modelli dal database che ora usa :memory:
 from database import init_db, Prenotazione, SessionLocal 
 from sqlalchemy import extract 
+from sqlalchemy.exc import OperationalError, IntegrityError 
 
 # --- 1. DATI STATICI DEL PROGETTO (Configurazione) ---
 
@@ -67,18 +68,23 @@ def get_orari_disponibili(data_selezionata: date, durata_servizio_min: int, pren
 
 # --- 3. FUNZIONE DI ACCESSO AL DATABASE (DB) E MESSAGGISTICA ---
 
-def fetch_prenotazioni_per_barbiere(barbiere_id, data_selezionata):
+def fetch_prenotazioni_per_barbiere(barbiere_id, data_selezionata: date):
     """
-    Recupera le prenotazioni REALI dal database.
+    Recupera le prenotazioni REALI dal database, filtrando sulla data.
     """
     db = SessionLocal()
     
-    # Usa extract per filtrare solo per la data
-    prenotazioni_records = db.query(Prenotazione).filter(
-        Prenotazione.barbiere_id == barbiere_id,
-        Prenotazione.data_appuntamento == data_selezionata
-    ).order_by(Prenotazione.ora_inizio).all() 
-    
+    try:
+        # CORREZIONE: Usiamo extract('date') per filtrare correttamente la colonna DateTime
+        # con l'oggetto date.date fornito (risolvendo l'OperationalError).
+        prenotazioni_records = db.query(Prenotazione).filter(
+            Prenotazione.barbiere_id == barbiere_id,
+            extract('date', Prenotazione.data_appuntamento) == data_selezionata
+        ).order_by(Prenotazione.ora_inizio).all() 
+    except OperationalError as e:
+        st.error(f"Errore di lettura dal database in memoria. Se l'app è appena stata avviata, riprova. Dettagli: {e}")
+        return []
+
     db.close()
     
     risultati_formattati = []
@@ -111,8 +117,8 @@ def send_confirmation_message(telefono, dati_finali):
     """
     nome_cliente = dati_finali.get('cliente_nome', 'Cliente') 
     
-    # Solo un messaggio di stato, la logica API deve essere implementata qui
-    st.toast(f"Tentativo di invio messaggio a {telefono}", icon='📱')
+    # Solo un messaggio di stato
+    st.toast(f"Tentativo di invio messaggio di conferma a {telefono}", icon='📱')
     
     return True 
 
@@ -185,7 +191,8 @@ def display_calendar_view(barbiere_id, nome_barbiere, data_selezionata):
                         db = SessionLocal()
                         nuova_prenotazione = Prenotazione(
                             barbiere_id=barbiere_id,
-                            data_appuntamento=data_selezionata,
+                            # Salviamo data_selezionata come DateTime, come richiesto dal modello aggiornato
+                            data_appuntamento=data_ora_inizio, 
                             ora_inizio=data_ora_inizio,
                             ora_fine=data_ora_fine,
                             servizio=f"{servizio_manuale}",
@@ -206,8 +213,9 @@ def display_calendar_view(barbiere_id, nome_barbiere, data_selezionata):
                         
                         st.success(f"Appuntamento salvato per {nome_barbiere} alle {ora_manuale.strftime('%H:%M')}!")
                         st.rerun() 
+                    except IntegrityError:
+                        st.error("Errore: La chiave primaria del DB in memoria è stata resettata. Riprova.")
                     except Exception as e:
-                        # La gestione degli errori è ora meno critica grazie a :memory:
                         st.error(f"Errore DB: Impossibile salvare l'appuntamento. Dettagli: {e}")
                 
 def admin_app():
@@ -349,17 +357,25 @@ def main_app():
             
             opzione_completa = slot_time # Inizia con solo l'orario
             
+            # CORREZIONE BUG: Aggiungi il nome del barbiere all'opzione
+            # solo se l'utente ha scelto "Indifferente", o se ha scelto un barbiere specifico.
+            # Questo garantisce che l'opzione selezionata sia sempre mappabile.
+            
             if barbiere_scelto_nome == "Indifferente":
-                 # Aggiungi il nome del barbiere solo se è stata scelta l'opzione "Indifferente"
+                 # Aggiungi il nome del barbiere se l'utente è "Indifferente"
+                opzione_completa = f"{slot_time} con {nome_barbiere}" 
+            elif len(barbieri_da_controllare) == 1:
+                # Se è stato scelto un solo barbiere, non serve ripetere il nome, ma lo aggiungiamo 
+                # per uniformità del dizionario se l'opzione non è già mappabile.
                 opzione_completa = f"{slot_time} con {nome_barbiere}" 
 
-            opzioni_disponibili.append(opzione_completa)
-            
-            # Mappa SEMPRE l'opzione visualizzata all'ID del barbiere
-            slot_to_barbiere_map[opzione_completa] = id_barbiere
+            if opzione_completa not in slot_to_barbiere_map:
+                opzioni_disponibili.append(opzione_completa)
+                # Mappa SEMPRE l'opzione visualizzata all'ID del barbiere
+                slot_to_barbiere_map[opzione_completa] = id_barbiere
 
     
-    slot_options_sorted = sorted(opzioni_disponibili[1:])
+    slot_options_sorted = sorted([o for o in opzioni_disponibili if o != "Seleziona un orario..."])
     final_options = [opzioni_disponibili[0]] + slot_options_sorted
 
 
@@ -373,10 +389,13 @@ def main_app():
     # --- Modulo di Conferma Finale (Attivato dalla selezione dal menu a tendina) ---
     if selected_slot_option != "Seleziona un orario...":
         
+        # Recupero Dati (Reso robusto)
         try:
             barbiere_id_finale = slot_to_barbiere_map[selected_slot_option]
         except KeyError:
-            st.error("Errore nel recupero del barbiere. Riprova la selezione.")
+            # Questo non dovrebbe succedere con le correzioni
+            st.warning("Seleziona di nuovo l'orario, errore interno nel mapping.")
+            st.session_state.pop('prenotazione_finale', None)
             return
 
         barbiere_nome_finale = BARBIERI[barbiere_id_finale]
@@ -419,11 +438,11 @@ def main_app():
                         durata_min = SERVIZI[dati_finali['servizio'].split(" (")[0]]
                         data_ora_fine = data_ora_inizio + timedelta(minutes=durata_min)
                         
-                        # 1. SALVA SUL DB (Ora su SQLite in memoria)
+                        # 1. SALVA SUL DB (Usa il campo data_appuntamento come DateTime)
                         db = SessionLocal()
                         nuova_prenotazione = Prenotazione(
                             barbiere_id=dati_finali['barbiere_id'],
-                            data_appuntamento=data_ora_inizio.date(), 
+                            data_appuntamento=data_ora_inizio, # Salviamo come DateTime
                             ora_inizio=data_ora_inizio,
                             ora_fine=data_ora_fine,
                             servizio=dati_finali['servizio'],
@@ -441,6 +460,7 @@ def main_app():
                         # 3. CONFERMA SU SCHERMO
                         st.success(f"✂️ Appuntamento confermato! Ti aspettiamo il {dati_finali['data']} alle {dati_finali['ora_inizio']}. 💈")
                         st.session_state.pop('prenotazione_finale') 
+                        st.rerun()
                     except Exception as e:
                         st.error(f"Errore durante il salvataggio. Dettagli: {e}")
                 else:
