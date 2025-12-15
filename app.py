@@ -1,9 +1,8 @@
 import streamlit as st
 from datetime import datetime, time, timedelta, date
-# Importiamo func per la correzione dell'errore di compilazione SQLite
 from sqlalchemy import func 
 from sqlalchemy.exc import OperationalError, IntegrityError 
-# Importiamo SessionLocal e i modelli dal database che ora usa :memory:
+# Importiamo SessionLocal e i modelli dal database
 from database import init_db, Prenotazione, SessionLocal 
 
 
@@ -77,15 +76,15 @@ def fetch_prenotazioni_per_barbiere(barbiere_id, data_selezionata: date):
     db = SessionLocal()
     
     try:
-        # CORREZIONE FINALE: Usiamo func.date() supportata da SQLite per filtrare correttamente 
-        # la colonna DateTime (data_appuntamento) con la data selezionata.
+        # Usa func.date() supportata da SQLite per filtrare correttamente
         prenotazioni_records = db.query(Prenotazione).filter(
             Prenotazione.barbiere_id == barbiere_id,
             func.date(Prenotazione.data_appuntamento) == data_selezionata.isoformat()
         ).order_by(Prenotazione.ora_inizio).all() 
     except OperationalError as e:
-        # Questo errore può apparire se Streamlit tenta di accedere al DB prima che sia ricreato.
-        st.error("Errore di lettura dal database in memoria. Se l'app è appena stata avviata, riprova.")
+        # Questo errore ora è gestito nel blocco di avvio, ma lasciamo qui 
+        # la gestione nel caso di un raro errore in-session.
+        st.error("Errore di lettura dal database in memoria. Dettagli: Riprova l'operazione.")
         return []
 
     db.close()
@@ -216,6 +215,9 @@ def display_calendar_view(barbiere_id, nome_barbiere, data_selezionata):
                         st.rerun() 
                     except IntegrityError:
                         st.error("Errore: La chiave primaria del DB in memoria è stata resettata. Riprova.")
+                    except OperationalError as e:
+                        # Gestione specifica nel caso di "no such table" qui
+                        st.error("Errore DB: Tentativo fallito di scrivere. Riprova subito a salvare l'appuntamento.")
                     except Exception as e:
                         st.error(f"Errore DB: Impossibile salvare l'appuntamento. Dettagli: {e}")
                 
@@ -403,7 +405,6 @@ def main_app():
                 'ora_inizio': ora_inizio_finale,
                 'servizio': service_selection 
             }
-            # Evita il doppio rerun qui per non bloccare l'UI
         
         
     if len(final_options) <= 1 and selected_slot_option == "Seleziona un orario...":
@@ -453,7 +454,9 @@ def main_app():
                         # 3. CONFERMA SU SCHERMO E RESETTA STATO
                         st.success(f"✂️ Appuntamento confermato! Ti aspettiamo il {dati_finali['data']} alle {dati_finali['ora_inizio']}. 💈")
                         st.session_state.pop('prenotazione_finale') 
-                        st.rerun() # Ricarica per pulire l'interfaccia
+                        st.rerun() 
+                    except OperationalError:
+                        st.error("Errore durante il salvataggio. Riprova subito a inviare il modulo.")
                     except Exception as e:
                         st.error(f"Errore durante il salvataggio. Dettagli: {e}")
                 else:
@@ -475,16 +478,18 @@ def main_app():
             st.error("Password errata.")
 
 
-# --- 6. AVVIO APPLICAZIONE ---
+# --- 6. AVVIO APPLICAZIONE (Logica di inizializzazione forzata) ---
 
 if __name__ == "__main__":
     
-    if 'db_initialized' not in st.session_state:
-        try:
-            init_db() 
-            st.session_state['db_initialized'] = True 
-        except Exception as e:
-            st.error(f"Errore critico di inizializzazione del database. Dettagli: {e}")
+    # AZIONE CRITICA: Forza l'inizializzazione del DB in memoria ad ogni esecuzione.
+    # Questo garantisce che le tabelle esistano anche dopo un riavvio rapido di Streamlit.
+    try:
+        init_db() 
+    except Exception as e:
+        # Se l'inizializzazione fallisce (molto raro), ferma l'app.
+        st.error(f"Errore critico di inizializzazione del database. L'app non può funzionare. Dettagli: {e}")
+        st.stop()
             
     
     if 'current_view' not in st.session_state:
