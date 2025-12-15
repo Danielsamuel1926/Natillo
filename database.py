@@ -31,7 +31,6 @@ class Prenotazione(Base):
     __tablename__ = 'prenotazioni'
     id = Column(Integer, primary_key=True, index=True)
     barbiere_id = Column(Integer)
-    # Usiamo DateTime
     data_appuntamento = Column(DateTime) 
     ora_inizio = Column(DateTime)
     ora_fine = Column(DateTime)
@@ -42,8 +41,12 @@ class Prenotazione(Base):
 # --- Funzione di Inizializzazione ---
 
 def init_db():
+    """
+    Crea le tabelle del database e popola i dati statici dei barbieri.
+    """
     Base.metadata.create_all(bind=engine)
     
+    # Popola la tabella barbieri
     db = SessionLocal()
     if db.query(Barbiere).count() == 0:
         barbieri_iniziali = [
